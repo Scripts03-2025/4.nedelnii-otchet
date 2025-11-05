@@ -1,0 +1,116 @@
+/**
+ * Скрипт: updateWeeklyStats_Rebuild
+ * Версия: v2.0.0 — Переписан с нуля по обновлённой логике (без конфликтов)
+ * Источник: https://chatgpt.com/c/67e6c8e4-bbc8-8010-a819-2d00335dd323
+ * РАБОТАЕТ ПРОВЕРЕНО 
+ */
+
+function updateWeeklyStats_Rebuild() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const source = ss.getSheetByName("Ниши 2.0");
+  const stat = ss.getSheetByName("s5 Стата");
+  const timezone = ss.getSpreadsheetTimeZone();
+
+  const standardParams = [
+    { name: "Опубликовано", col: "H" },
+    { name: "Написано", col: "AG" },
+    { name: "Запущено в работу", col: "D" }
+  ];
+
+  const top10Params = [
+    { name: "В Топ-10 яндекса", col: "K" },
+    { name: "В Топ-10 яндекса через 2 недели", col: "L" },
+    { name: "В Топ-10 Google через месяц", col: "M" }
+  ];
+
+  const allParams = [...standardParams, ...top10Params];
+  const paramRowStart = 8;
+  const paramNames = stat.getRange(paramRowStart, 2, stat.getLastRow() - paramRowStart + 1).getValues().flat();
+
+  const today = new Date();
+  const weekStart = (d) => { const dt = new Date(d); dt.setDate(dt.getDate() - dt.getDay() + 1); dt.setHours(0,0,0,0); return dt; };
+  const formatRange = (d) => `${Utilities.formatDate(d, timezone, 'dd')}–${Utilities.formatDate(new Date(d.getTime() + 6*86400000), timezone, 'dd.MM.yy')}`;
+  const formatCheck = (d) => Utilities.formatDate(d, timezone, 'dd.MM.yyyy HH:mm');
+
+  const current = weekStart(today);
+
+  // Выясняем: первый запуск или нет (10 пустых столбцов справа от параметров)
+  const isFirstRun = allParams.every(p => {
+    const r = paramNames.indexOf(p.name);
+    if (r === -1) return false;
+    const row = paramRowStart + r;
+    const vals = stat.getRange(row, 3, 1, 10).getValues()[0];
+    return vals.every(v => v === '' || v === null);
+  });
+
+  const weeksToUpdate = isFirstRun ? 16 : 5;
+
+  // Собираем массив дат недель: [0] — текущая, [1] — предыдущая и т.д.
+  const weeks = Array.from({ length: weeksToUpdate }, (_, i) => {
+    const d = new Date(current);
+    d.setDate(d.getDate() - i * 7);
+    return d;
+  });
+
+  // Проверяем, есть ли текущая неделя в C7. Если нет — вставляем
+  const firstLabel = formatRange(current);
+  const currentLabelCell = stat.getRange(7, 3).getValue();
+  if (currentLabelCell !== firstLabel) {
+    stat.insertColumnBefore(3);
+    stat.getRange(7, 3).setValue(firstLabel).setFontWeight('bold');
+    const endDate = new Date(current); endDate.setDate(current.getDate() + 6);
+    if (current.getMonth() !== endDate.getMonth()) {
+      stat.getRange(7, 3).setBackground("#b6d7a8");
+    } else {
+      stat.getRange(7, 3).setBackground(null);
+    }
+  }
+
+  const sourceData = source.getDataRange().getValues();
+
+  weeks.forEach((startDate, i) => {
+    const label = formatRange(startDate);
+    const col = 3 + i;
+    stat.getRange(7, col).setValue(label).setFontWeight('bold');
+    const end = new Date(startDate); end.setDate(end.getDate() + 6);
+    stat.getRange(7, col).setBackground(startDate.getMonth() !== end.getMonth() ? "#b6d7a8" : null);
+
+    allParams.forEach(param => {
+      const r = paramNames.indexOf(param.name);
+      if (r === -1) return;
+      const row = paramRowStart + r;
+      let count = 0;
+
+      for (let j = 1; j < sourceData.length; j++) {
+        const line = sourceData[j];
+        const raw = line[getColIndex(param.col)];
+        let date = line[getColIndex("H")];
+
+        if (standardParams.some(p => p.name === param.name)) {
+          date = raw;
+          if (!(date instanceof Date)) continue;
+        } else {
+          if (raw !== 1 && raw !== "1") continue;
+          if (!(date instanceof Date)) continue;
+        }
+
+        const cmp = new Date(date); cmp.setHours(0, 0, 0, 0);
+        if (cmp >= startDate && cmp <= end) count++;
+      }
+
+      const val = (top10Params.some(p => p.name === param.name) && count === 0) ? "нет инфы" : count;
+      stat.getRange(row, col).setValue(val);
+    });
+
+    const checkRow = paramNames.indexOf("Дата проверки");
+    if (checkRow !== -1) {
+      stat.getRange(paramRowStart + checkRow, col).setValue(formatCheck(today));
+    }
+  });
+
+  function getColIndex(col) {
+    let base = 0;
+    for (let i = 0; i < col.length; i++) base = base * 26 + col.charCodeAt(i) - 64;
+    return base - 1;
+  }
+}
